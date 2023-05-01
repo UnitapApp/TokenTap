@@ -6,6 +6,7 @@
   },
   "dependencies": {
     "@ethereum-waffle/mock-contract": "^4.0.4",
-    "@openzeppelin/contracts": "^4.8.3"
+    "@openzeppelin/contracts": "^4.8.3",
+    "dotenv": "^16.0.3"
   }
 }
