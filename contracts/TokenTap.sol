@@ -48,8 +48,8 @@ contract TokenTap is AccessControl {
 
         if (!hasRole(UNITAP_ROLE, signer)) revert InvalidSignature();
 
-        IERC20(token).safeTransfer(user, amount);
         usedNonces[user][nonce] = true;
+        IERC20(token).safeTransfer(user, amount);
 
         emit TokensClaimed(token, user, amount, nonce);
     }
