@@ -22,9 +22,9 @@ contract TokenTap is AccessControl {
     error InvalidSignature();
     error NonceAlreadyUsed();
 
-    constructor() {
-        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        _grantRole(UNITAP_ROLE, msg.sender);
+    constructor(address admin, address unitap) {
+        _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(UNITAP_ROLE, unitap);
     }
 
     function claimToken(
