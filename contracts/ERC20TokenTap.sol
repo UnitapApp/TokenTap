@@ -17,6 +17,9 @@ contract ERC20TokenTap is AccessControl {
         uint256 maxNumClaims;
         uint256 claimAmount;
         uint256 claimsCount;
+        uint256 startTime;
+        uint256 endTime;
+        bool isRefunded;
     }
 
     bytes32 public constant DAO_ROLE = keccak256("DAO_ROLE");
@@ -48,6 +51,12 @@ contract ERC20TokenTap is AccessControl {
         uint256 claimId
     );
 
+    event DistributionRefunded(
+        address recipient,
+        uint256 distributionId,
+        uint256 amount
+    );
+
     constructor(
         address admin,
         uint256 _muonAppId,
@@ -66,11 +75,14 @@ contract ERC20TokenTap is AccessControl {
     function distributeToken(
         address token,
         uint256 maxNumClaims,
-        uint256 claimAmount
+        uint256 claimAmount,
+        uint256 startTime,
+        uint256 endTime
     ) external {
         require(token != address(0), "Invalid token");
         require(maxNumClaims > 0, "Invalid token");
         require(claimAmount > 0, "Invalid token");
+        require(startTime > block.timestamp && endTime > startTime, "Invalid period");
 
         ++lastDistributionId;
         Distribution storage distribution = distributions[lastDistributionId];
@@ -78,6 +90,8 @@ contract ERC20TokenTap is AccessControl {
         distribution.token = token;
         distribution.maxNumClaims = maxNumClaims;
         distribution.claimAmount = claimAmount;
+        distribution.startTime = startTime;
+        distribution.endTime = endTime;
 
         uint256 totalAmount = claimAmount * maxNumClaims;
         uint256 balance = IERC20(token).balanceOf(address(this));
@@ -117,6 +131,10 @@ contract ERC20TokenTap is AccessControl {
             distributions[distributionId].claimsCount < distributions[distributionId].maxNumClaims, 
             "Max num claims has been reached"
         );
+        require(
+            block.timestamp > distributions[distributionId].startTime && 
+            block.timestamp <= distributions[distributionId].endTime
+        );
 
         bytes32 hash = keccak256(
             abi.encodePacked(
@@ -140,6 +158,26 @@ contract ERC20TokenTap is AccessControl {
         );
 
         emit TokensClaimed(distributions[distributionId].token, user, claimId);
+    }
+
+    function withdrawReaminingTokens(address to, uint256 distributionId) external {
+        require(msg.sender == distributions[distributionId].provider, "Not permitted");
+        require(!distributions[distributionId].isRefunded, "Already refunded");
+        require(block.timestamp > distributions[distributionId].endTime, "Distribution is still open");
+
+        distributions[distributionId].isRefunded = true;
+
+        uint256 refundAmount = distributions[distributionId].claimAmount * (
+            distributions[distributionId].maxNumClaims - distributions[distributionId].claimsCount
+        );
+
+        IERC20(distributions[distributionId].token).safeTransfer(
+            to,
+            refundAmount
+        );
+
+        emit DistributionRefunded(to, distributionId, refundAmount);
+
     }
 
     function setMuonAppId(
