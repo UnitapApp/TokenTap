@@ -78,8 +78,7 @@ contract ERC20TokenTap is AccessControl {
         uint256 claimAmount,
         uint256 startTime,
         uint256 endTime
-    ) external {
-        require(token != address(0), "Invalid token");
+    ) external payable {
         require(maxNumClaims > 0, "Invalid token");
         require(claimAmount > 0, "Invalid token");
         require(startTime > block.timestamp && endTime > startTime, "Invalid period");
@@ -94,21 +93,26 @@ contract ERC20TokenTap is AccessControl {
         distribution.endTime = endTime;
 
         uint256 totalAmount = claimAmount * maxNumClaims;
-        uint256 balance = IERC20(token).balanceOf(address(this));
 
-        IERC20(token).safeTransferFrom(
-            msg.sender,
-            address(this),
-            totalAmount
-        );
+        if(token == address(0)) {
+            require(msg.value == totalAmount, "!msg.value");
+        } else {
+            uint256 balance = IERC20(token).balanceOf(address(this));
 
-        uint256 receivedAmount = IERC20(token).balanceOf(address(this)) -
+            IERC20(token).safeTransferFrom(
+                msg.sender,
+                address(this),
+                totalAmount
+            );
+
+            uint256 receivedAmount = IERC20(token).balanceOf(address(this)) -
             balance;
 
-        require(
-            totalAmount == receivedAmount,
-            "receivedAmount != totalAmount"
-        );
+            require(
+                totalAmount == receivedAmount,
+                "receivedAmount != totalAmount"
+            );
+        }
 
         emit TokenDistributed(lastDistributionId, msg.sender, token, maxNumClaims, claimAmount);
     }
@@ -152,10 +156,15 @@ contract ERC20TokenTap is AccessControl {
 
         distributions[distributionId].claimsCount += 1;
         usedClaims[claimId] = true;
-        IERC20(distributions[distributionId].token).safeTransfer(
-            user,
-            distributions[distributionId].claimAmount
-        );
+
+        if(distributions[distributionId].token == address(0)) {
+            payable(user).transfer(distributions[distributionId].claimAmount);
+        } else {
+            IERC20(distributions[distributionId].token).safeTransfer(
+                user,
+                distributions[distributionId].claimAmount
+            );
+        }
 
         emit TokensClaimed(distributions[distributionId].token, user, claimId);
     }
@@ -171,10 +180,14 @@ contract ERC20TokenTap is AccessControl {
             distributions[distributionId].maxNumClaims - distributions[distributionId].claimsCount
         );
 
-        IERC20(distributions[distributionId].token).safeTransfer(
-            to,
-            refundAmount
-        );
+        if(distributions[distributionId].token == address(0)) {
+            payable(to).transfer(refundAmount);
+        } else {
+            IERC20(distributions[distributionId].token).safeTransfer(
+                to,
+                refundAmount
+            );
+        }
 
         emit DistributionRefunded(to, distributionId, refundAmount);
 
