@@ -79,8 +79,8 @@ contract ERC20TokenTap is AccessControl {
         uint256 startTime,
         uint256 endTime
     ) external payable {
-        require(maxNumClaims > 0, "Invalid token");
-        require(claimAmount > 0, "Invalid token");
+        require(maxNumClaims > 0, "Invalid maxNumClaims");
+        require(claimAmount > 0, "Invalid claimAmount");
         require(startTime > block.timestamp && endTime > startTime, "Invalid period");
 
         ++lastDistributionId;
