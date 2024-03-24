@@ -2,150 +2,512 @@ import {
   MockContract,
   deployMockContract,
 } from "@ethereum-waffle/mock-contract";
-import { IERC20__factory, TokenTap } from "../typechain-types";
+import { IERC20__factory, ERC20TokenTap, ERC20Test } from "../typechain-types";
+
 import { ethers } from "hardhat";
 import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
-
+import { time } from "@nomicfoundation/hardhat-network-helpers";
+import { BigNumberish, BigNumber, ContractReceipt } from "ethers";
 import { expect } from "chai";
 
-describe("TokenTap", async () => {
-  let tokenTap: TokenTap;
+describe("ERC20TokenTap", async () => {
+  let tokenTap: ERC20TokenTap;
   let token1: MockContract;
+  let usdc: ERC20Test;
   let token2: MockContract;
   let unitapServer: SignerWithAddress;
   let admin: SignerWithAddress;
   let user1: SignerWithAddress;
   let user2: SignerWithAddress;
   let invalidServer: SignerWithAddress;
+  const ONE = ethers.utils.parseEther("1");
+  let initiatorBalanceBeforeDistribute: BigNumber;
+  let initiatorBalanceAfterDistributeToken2: BigNumber;
+  let distributeGas: BigNumber;
+  let distributeGas2: BigNumber;
+
+  const accessControlMessage =
+    "AccessControl: account 0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc is missing role 0x3b5d4cc60d3ec3516ee8ae083bd60934f6eb2a6c54b1229985c41bfb092b2603";
+
+  const adminRoleMessage =
+    "AccessControl: account 0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc is missing role 0x0000000000000000000000000000000000000000000000000000000000000000";
+
+  const muonPublicKey = {
+    x: "0x5f400480f526524701e012e15c7d841fe38611854a91e30eadfb0e8d48772d56",
+    parity: 0,
+  };
 
   beforeEach(async () => {
     [admin, unitapServer, user1, user2, invalidServer] =
       await ethers.getSigners();
 
-    const tokenTapFactory = await ethers.getContractFactory("TokenTap");
-    tokenTap = await tokenTapFactory.connect(admin).deploy();
+    const tokenTapFactory = await ethers.getContractFactory("ERC20TokenTap");
 
-    token1 = await deployMockContract(admin, IERC20__factory.abi);
-    token2 = await deployMockContract(admin, IERC20__factory.abi);
+    tokenTap = await tokenTapFactory
+      .connect(admin)
+      .deploy(
+        admin.address,
+        "84432823270461485387310871833182886925643143330424776997873308187796891046056",
+        muonPublicKey,
+        "0x3234D9F7933d117F5a4e87fA11879BA4caC5151a",
+        "0x4d7A51Caa1E79ee080A7a045B61f424Da8965A3c"
+      );
+
+    const usdcFactory = await ethers.getContractFactory("ERC20Test");
+    usdc = await usdcFactory.connect(admin).deploy();
+    await usdc.deployed();
+
+    await usdc.mint(user1.address, ONE.mul(300));
+
+    initiatorBalanceBeforeDistribute = await ethers.provider.getBalance(
+      user1.address
+    );
 
     await tokenTap
       .connect(admin)
-      .grantRole(await tokenTap.UNITAP_ROLE(), unitapServer.address);
+      .grantRole(await tokenTap.DEFAULT_ADMIN_ROLE(), unitapServer.address);
   });
 
-  it("should be able to claim with valid signature", async () => {
-    const user = user1.address;
-    const token = token1.address;
-    const amount = 100;
-    const nonce = 1;
+  it("should be able to distribute usdc token successfully", async () => {
+    await usdc.connect(user1).approve(tokenTap.address, ONE.mul(250));
+    const usdcBalanceBeforeTx = await usdc
+      .connect(user1)
+      .balanceOf(user1.address);
 
-    const message = ethers.utils.solidityPack(
-      ["address", "address", "uint256", "uint32"],
-      [user, token, amount, nonce]
+    const now = await time.latest();
+    const token = usdc.address;
+    const maxNumClaims = 5;
+    const claimAmount = ONE.mul(50);
+    const startTime = now + 10;
+    const endTime = now + 20;
+    let initiatorBalanceBeforeDistributeToken =
+      await ethers.provider.getBalance(user1.address);
+
+    const tx = await tokenTap
+      .connect(user1)
+      .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+        value: ethers.utils.parseEther("0"),
+      });
+
+    const usdcBalanceAfterTx = await usdc
+      .connect(user1)
+      .balanceOf(user1.address);
+
+    let initiatorBalanceAfterDistributeToken = await ethers.provider.getBalance(
+      user1.address
     );
 
-    const messageHash = ethers.utils.keccak256(message);
+    const receipt = await tx.wait();
 
-    // personal sign using unitapServer
-    const signature = await ethers.provider.send("personal_sign", [
-      messageHash,
-      unitapServer.address,
-    ]);
+    distributeGas = receipt.cumulativeGasUsed.mul(receipt.effectiveGasPrice);
 
-    await token1.mock.transfer.withArgs(user, amount).returns(true);
+    expect(
+      initiatorBalanceBeforeDistributeToken.sub(
+        initiatorBalanceAfterDistributeToken
+      )
+    ).to.eq(distributeGas);
 
-    await tokenTap.claimToken(user, token, amount, nonce, signature);
+    expect(usdcBalanceBeforeTx.sub(usdcBalanceAfterTx)).to.eq(
+      claimAmount.mul(maxNumClaims)
+    );
+
+    expect(await usdc.balanceOf(tokenTap.address)).to.eq(
+      claimAmount.mul(maxNumClaims)
+    );
+
+    expect(await ethers.provider.getBalance(tokenTap.address)).to.eq(
+      ethers.utils.parseEther("0")
+    );
+    let distributions = await tokenTap.distributions(1);
+    expect(distributions.provider).to.eq(user1.address);
+    expect(distributions.token).to.eq(usdc.address);
+    expect(distributions.startTime).to.eq(startTime);
+    expect(distributions.endTime).to.eq(endTime);
+    expect(distributions.maxNumClaims).to.eq(maxNumClaims);
+    expect(distributions.claimAmount).to.eq(claimAmount);
+    expect(distributions.isRefunded).to.eq(false);
+    let lastDistributionId = await tokenTap.lastDistributionId();
+    expect(lastDistributionId.eq(1));
   });
 
-  it("should reject invalid signature", async () => {
-    const user = user1.address;
-    const token = token1.address;
-    const amount = 100;
-    const nonce = 1;
-
-    const message = ethers.utils.solidityPack(
-      ["address", "address", "uint256", "uint32"],
-      [user, token, amount, nonce]
-    );
-
-    const messageHash = ethers.utils.keccak256(message);
-
-    // personal sign using unitapServer
-    const signature = await ethers.provider.send("personal_sign", [
-      messageHash,
-      invalidServer.address,
-    ]);
+  it("should not be able to distribute usdc token with invalid amount", async () => {
+    const now = await time.latest();
+    const token = usdc.address;
+    const maxNumClaims = 1;
+    const claimAmount = ONE.mul(400);
+    const startTime = now + 10;
+    const endTime = now + 20;
 
     await expect(
-      tokenTap.claimToken(user, token, amount, nonce, signature)
-    ).to.be.revertedWithCustomError(tokenTap, "InvalidSignature");
-  });
+      tokenTap
+        .connect(user1)
+        .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+          value: ethers.utils.parseEther("0"),
+        })
+    ).to.be.revertedWith("ERC20: insufficient allowance");
 
-  it("should rejected already used nonce", async () => {
-    const user = user1.address;
-    const token = token1.address;
-    const amount = 100;
-    const nonce = 1;
-
-    const message = ethers.utils.solidityPack(
-      ["address", "address", "uint256", "uint32"],
-      [user, token, amount, nonce]
-    );
-
-    const messageHash = ethers.utils.keccak256(message);
-
-    // personal sign using unitapServer
-    const signature = await ethers.provider.send("personal_sign", [
-      messageHash,
-      unitapServer.address,
-    ]);
-
-    await token1.mock.transfer.withArgs(user, amount).returns(true);
-
-    await tokenTap.claimToken(user, token, amount, nonce, signature);
+    await usdc.connect(user1).approve(tokenTap.address, ONE.mul(400));
 
     await expect(
-      tokenTap.claimToken(user, token, amount, nonce, signature)
-    ).to.be.revertedWithCustomError(tokenTap, "NonceAlreadyUsed");
+      tokenTap
+        .connect(user1)
+        .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+          value: ethers.utils.parseEther("0"),
+        })
+    ).to.be.revertedWith("ERC20: transfer amount exceeds balance");
   });
-  it("handle claims for different tokens and users simultaneously.", async () => {
-    const u1 = user1.address;
-    const u2 = user2.address;
-    const t1 = token1.address;
-    const t2 = token2.address;
-    const amount1 = 100;
-    const amount2 = 200;
-    const nonce1 = 1;
-    const nonce2 = 2;
 
-    const message1 = ethers.utils.solidityPack(
-      ["address", "address", "uint256", "uint32"],
-      [u1, t1, amount1, nonce1]
+  it("should not be able to distribute usdc token with invalid maxNumber", async () => {
+    await usdc.connect(user1).approve(tokenTap.address, ONE.mul(250));
+    const token = usdc.address;
+    const claimAmount = ONE.mul(50);
+    const now = await time.latest();
+    const maxNumClaims = 0;
+    const startTime = now + 10;
+    const endTime = now + 20;
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+          value: ethers.utils.parseEther("0"),
+        })
+    ).to.be.revertedWith("Invalid token");
+  });
+
+  it("should not be able to distribute usdc token with invalid date", async () => {
+    await usdc.connect(user1).approve(tokenTap.address, ONE.mul(250));
+    const token = usdc.address;
+    const claimAmount = ONE.mul(50);
+    const now = await time.latest();
+    const maxNumClaims = 5;
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .distributeToken(token, maxNumClaims, claimAmount, now, now + 20, {
+          value: ethers.utils.parseEther("0"),
+        })
+    ).to.be.revertedWith("Invalid period");
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .distributeToken(token, maxNumClaims, claimAmount, now + 20, now + 20, {
+          value: ethers.utils.parseEther("0"),
+        })
+    ).to.be.revertedWith("Invalid period");
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .distributeToken(token, maxNumClaims, claimAmount, now + 20, now + 10, {
+          value: ethers.utils.parseEther("0"),
+        })
+    ).to.be.revertedWith("Invalid period");
+  });
+
+  it("should be able to distribute native token successfully", async () => {
+    const now = await time.latest();
+    const token = ethers.constants.AddressZero;
+    const maxNumClaims = 5;
+    const claimAmount = ethers.utils.parseEther("0.01");
+    const startTime = now + 10;
+    const endTime = now + 20;
+
+    const tx = await tokenTap
+      .connect(user1)
+      .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+        value: ethers.utils.parseEther("0.05"),
+      });
+
+    const receipt = tx.wait();
+
+    distributeGas = (await receipt).cumulativeGasUsed.mul(
+      (await receipt).effectiveGasPrice
     );
 
-    const messageHash1 = ethers.utils.keccak256(message1);
-
-    const signature1 = await ethers.provider.send("personal_sign", [
-      messageHash1,
-      unitapServer.address,
-    ]);
-
-    const message2 = ethers.utils.solidityPack(
-      ["address", "address", "uint256", "uint32"],
-      [u2, t2, amount2, nonce2]
+    let initiatorBalanceAfterDistributeToken = await ethers.provider.getBalance(
+      user1.address
     );
 
-    const messageHash2 = ethers.utils.keccak256(message2);
+    expect(
+      initiatorBalanceBeforeDistribute
+        .sub(initiatorBalanceAfterDistributeToken)
+        .sub(distributeGas)
+    ).to.eq(ethers.utils.parseEther("0.05"));
 
-    const signature2 = await ethers.provider.send("personal_sign", [
-      messageHash2,
-      unitapServer.address,
-    ]);
+    expect(await ethers.provider.getBalance(tokenTap.address)).to.eq(
+      ethers.utils.parseEther("0.05")
+    );
 
-    await token1.mock.transfer.withArgs(u1, amount1).returns(true);
-    await token2.mock.transfer.withArgs(u2, amount2).returns(true);
+    let distributions = await tokenTap.distributions(1);
+    expect(distributions.provider).to.eq(user1.address);
+    expect(distributions.token).to.eq(ethers.constants.AddressZero);
+    expect(distributions.startTime).to.eq(startTime);
+    expect(distributions.endTime).to.eq(endTime);
+    expect(distributions.maxNumClaims).to.eq(maxNumClaims);
+    expect(distributions.claimAmount).to.eq(claimAmount);
+    expect(distributions.isRefunded).to.eq(false);
 
-    await tokenTap.claimToken(u1, t1, amount1, nonce1, signature1);
-    await tokenTap.claimToken(u2, t2, amount2, nonce2, signature2);
+    let lastDistributionId = await tokenTap.lastDistributionId();
+    expect(lastDistributionId.eq(1));
+
+    initiatorBalanceBeforeDistribute = await ethers.provider.getBalance(
+      user1.address
+    );
+
+    const tx2 = await tokenTap
+      .connect(user1)
+      .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+        value: ethers.utils.parseEther("0.05"),
+      });
+
+    const receipt2 = tx2.wait();
+
+    expect(await ethers.provider.getBalance(tokenTap.address)).to.eq(
+      ethers.utils.parseEther("0.1")
+    );
+
+    distributeGas2 = (await receipt2).cumulativeGasUsed.mul(
+      (await receipt2).effectiveGasPrice
+    );
+
+    let initiatorBalanceAfterDistributeToken2 =
+      await ethers.provider.getBalance(user1.address);
+
+    expect(
+      initiatorBalanceBeforeDistribute
+        .sub(initiatorBalanceAfterDistributeToken2)
+        .sub(distributeGas2)
+    ).to.eq(ethers.utils.parseEther("0.05"));
+
+    distributions = await tokenTap.distributions(2);
+    expect(distributions.provider).to.eq(user1.address);
+    expect(distributions.token).to.eq(ethers.constants.AddressZero);
+    expect(distributions.startTime).to.eq(startTime);
+    expect(distributions.endTime).to.eq(endTime);
+    expect(distributions.maxNumClaims).to.eq(maxNumClaims);
+    expect(distributions.claimAmount).to.eq(claimAmount);
+    expect(distributions.isRefunded).to.eq(false);
+
+    lastDistributionId = await tokenTap.lastDistributionId();
+    expect(lastDistributionId.eq(2));
+  });
+
+  it("should not be able to distribute native token with invalid amount", async () => {
+    const now = await time.latest();
+    const token = ethers.constants.AddressZero;
+    const maxNumClaims = 5;
+    const claimAmount = ethers.utils.parseEther("0.01");
+    const startTime = now + 10;
+    const endTime = now + 20;
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+          value: ethers.utils.parseEther("0.02"),
+        })
+    ).to.be.revertedWith("!msg.value");
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+          value: ethers.utils.parseEther("0"),
+        })
+    ).to.be.revertedWith("!msg.value");
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+          value: ethers.utils.parseEther("2"),
+        })
+    ).to.be.revertedWith("!msg.value");
+  });
+
+  it("should not be able to distribute native token with invalid maxNumber", async () => {
+    const now = await time.latest();
+    const token = ethers.constants.AddressZero;
+    const maxNumClaims = 0;
+    const claimAmount = ethers.utils.parseEther("0.01");
+    const startTime = now + 10;
+    const endTime = now + 20;
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+          value: ethers.utils.parseEther("0.02"),
+        })
+    ).to.be.revertedWith("Invalid token");
+  });
+
+  it("should not be able to distribute native token with invalid date", async () => {
+    const now = await time.latest();
+    const token = ethers.constants.AddressZero;
+    const maxNumClaims = 5;
+    const claimAmount = ethers.utils.parseEther("0.01");
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .distributeToken(token, maxNumClaims, claimAmount, now, now + 20, {
+          value: ethers.utils.parseEther("0.02"),
+        })
+    ).to.be.revertedWith("Invalid period");
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .distributeToken(token, maxNumClaims, claimAmount, now + 20, now + 20, {
+          value: ethers.utils.parseEther("0.02"),
+        })
+    ).to.be.revertedWith("Invalid period");
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .distributeToken(token, maxNumClaims, claimAmount, now + 20, now + 10, {
+          value: ethers.utils.parseEther("0.02"),
+        })
+    ).to.be.revertedWith("Invalid period");
+  });
+
+  it("should not be able to set muon address if has not access control", async () => {
+    await expect(
+      tokenTap
+        .connect(user1)
+        .setMuonAddress("0x3234D9F7933d117F5a4e87fA11879BA4caC5151a")
+    ).to.be.revertedWith(accessControlMessage);
+  });
+
+  it("should be able to set muon address successfully if has access control", async () => {
+    await tokenTap
+      .connect(admin)
+      .setMuonAddress("0x3234D9F7933d117F5a4e87fA11879BA4caC5151a");
+  });
+
+  it("should not be able to set muon App ID if has not access control", async () => {
+    await expect(
+      tokenTap
+        .connect(user1)
+        .setMuonAppId("0x3234D9F7933d117F5a4e87fA11879BA4caC5151a")
+    ).to.be.revertedWith(accessControlMessage);
+  });
+
+  it("should be able to set muon  App ID successfully if has access control", async () => {
+    await tokenTap
+      .connect(admin)
+      .setMuonAppId("0x3234D9F7933d117F5a4e87fA11879BA4caC5151a");
+  });
+
+  it("should not be able to set muon gate way if has not access control", async () => {
+    await expect(
+      tokenTap
+        .connect(user1)
+        .setMuonGateway("0x3234D9F7933d117F5a4e87fA11879BA4caC5151a")
+    ).to.be.revertedWith(accessControlMessage);
+  });
+
+  it("should be able to set muon gate way successfully if has access control", async () => {
+    await tokenTap
+      .connect(admin)
+      .setMuonGateway("0x3234D9F7933d117F5a4e87fA11879BA4caC5151a");
+  });
+
+  it("should not be able to set muon public key if has not access control", async () => {
+    await expect(
+      tokenTap.connect(user1).setMuonPublicKey(muonPublicKey)
+    ).to.be.revertedWith(accessControlMessage);
+  });
+
+  it("should be able to set muon public key successfully if has access control", async () => {
+    await tokenTap.connect(admin).setMuonPublicKey(muonPublicKey);
+  });
+
+  it("admin should be able to set access control", async () => {
+    const DAO_ROLE = await tokenTap.DAO_ROLE();
+    const DEFAULT_ADMIN_ROLE = await tokenTap.DEFAULT_ADMIN_ROLE();
+    await tokenTap.connect(admin).grantRole(DAO_ROLE, user1.address);
+    await tokenTap.connect(admin).grantRole(DEFAULT_ADMIN_ROLE, user1.address);
+  });
+
+  it("has role should be false", async () => {
+    const DEFAULT_ADMIN_ROLE = await tokenTap.DEFAULT_ADMIN_ROLE();
+    const DAO_ROLE = await tokenTap.DAO_ROLE();
+
+    expect(
+      await tokenTap.connect(admin).hasRole(DEFAULT_ADMIN_ROLE, user1.address)
+    ).to.eq(false);
+
+    expect(
+      await tokenTap.connect(admin).hasRole(DAO_ROLE, user1.address)
+    ).to.eq(false);
+  });
+
+  it("has role should be true", async () => {
+    const DEFAULT_ADMIN_ROLE = await tokenTap.DEFAULT_ADMIN_ROLE();
+    const DAO_ROLE = await tokenTap.DAO_ROLE();
+
+    await tokenTap.connect(admin).grantRole(DEFAULT_ADMIN_ROLE, user1.address);
+    await tokenTap.connect(admin).grantRole(DAO_ROLE, user1.address);
+    expect(
+      await tokenTap.connect(admin).hasRole(DAO_ROLE, user1.address)
+    ).to.eq(true);
+  });
+
+  it("should be able to set values if has DAO role", async () => {
+    const DAO_ROLE = await tokenTap.DAO_ROLE();
+    await tokenTap.connect(admin).grantRole(DAO_ROLE, user1.address);
+    expect(
+      await tokenTap.connect(admin).hasRole(DAO_ROLE, user1.address)
+    ).to.eq(true);
+
+    await tokenTap
+      .connect(user1)
+      .setMuonAddress("0x3234D9F7933d117F5a4e87fA11879BA4caC5151a");
+
+    await tokenTap
+      .connect(user1)
+      .setMuonAppId("0x3234D9F7933d117F5a4e87fA11879BA4caC5151a");
+
+    await tokenTap
+      .connect(user1)
+      .setMuonGateway("0x3234D9F7933d117F5a4e87fA11879BA4caC5151a");
+
+    await tokenTap.connect(user1).setMuonPublicKey(muonPublicKey);
+  });
+
+  it("should not be able to set values if just has admin role", async () => {
+    const DEFAULT_ADMIN_ROLE = await tokenTap.DEFAULT_ADMIN_ROLE();
+    await tokenTap.connect(admin).grantRole(DEFAULT_ADMIN_ROLE, user1.address);
+
+    expect(
+      await tokenTap.connect(admin).hasRole(DEFAULT_ADMIN_ROLE, user1.address)
+    ).to.eq(true);
+    await expect(
+      tokenTap
+        .connect(user1)
+        .setMuonAddress("0x3234D9F7933d117F5a4e87fA11879BA4caC5151a")
+    ).to.be.revertedWith(accessControlMessage);
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .setMuonAppId("0x3234D9F7933d117F5a4e87fA11879BA4caC5151a")
+    ).to.be.revertedWith(accessControlMessage);
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .setMuonGateway("0x3234D9F7933d117F5a4e87fA11879BA4caC5151a")
+    ).to.be.revertedWith(accessControlMessage);
+
+    await expect(
+      tokenTap.connect(user1).setMuonPublicKey(muonPublicKey)
+    ).to.be.revertedWith(accessControlMessage);
   });
 });
