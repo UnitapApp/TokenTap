@@ -23,6 +23,7 @@ contract ERC20TokenTap is AccessControl {
     }
 
     bytes32 public constant DAO_ROLE = keccak256("DAO_ROLE");
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
     mapping(uint256 => bool) public usedClaims;
     mapping(uint256 => Distribution) public distributions;
@@ -57,6 +58,12 @@ contract ERC20TokenTap is AccessControl {
         uint256 amount
     );
 
+    event DistributionExtended(
+        uint256 distributionId,
+        uint256 maxNumClaims,
+        uint256 endTime
+    );
+
     constructor(
         address admin,
         uint256 _muonAppId,
@@ -70,6 +77,7 @@ contract ERC20TokenTap is AccessControl {
         muonValidGateway = _muonValidGateway;
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(DAO_ROLE, admin);
+        _grantRole(ADMIN_ROLE, admin);
     }
 
     function distributeToken(
@@ -215,6 +223,62 @@ contract ERC20TokenTap is AccessControl {
         address _gatewayAddress
     ) external onlyRole(DAO_ROLE) {
         muonValidGateway = _gatewayAddress;
+    }
+
+    function extendDistribution(
+        uint256 distributionId, 
+        uint256 maxNumClaims, 
+        uint256 endTime
+    ) payable external {
+        require(msg.sender == distributions[distributionId].provider, "Not permitted");
+        require(maxNumClaims >= distributions[distributionId].maxNumClaims, "Invalid maxNumClaims");
+        require(endTime >= distributions[distributionId].endTime, "Invalid maxNumClaims");
+
+        uint256 amount = (
+            maxNumClaims - distributions[distributionId].maxNumClaims
+        ) * distributions[distributionId].claimAmount;
+
+        if (amount > 0) {
+            address token = distributions[distributionId].token;
+            
+            if(token == address(0)) {
+                require(msg.value == amount, "!msg.value");
+            } else {
+                uint256 balance = IERC20(token).balanceOf(address(this));
+
+                IERC20(token).safeTransferFrom(
+                    msg.sender,
+                    address(this),
+                    amount
+                );
+
+                uint256 receivedAmount = IERC20(token).balanceOf(address(this)) -
+                balance;
+
+                require(
+                    amount == receivedAmount,
+                    "receivedAmount != amount"
+                );
+            }
+        }
+
+        distributions[distributionId].maxNumClaims = maxNumClaims;
+        distributions[distributionId].endTime = endTime;
+
+        emit DistributionExtended(distributionId, maxNumClaims, endTime);
+    }
+
+    function adminWithdraw(
+        uint256 _amount,
+        address _to,
+        address _tokenAddr
+    ) public onlyRole(ADMIN_ROLE) {
+        require(_to != address(0), "Invalid recipient");
+        if (_tokenAddr == address(0)) {
+            payable(_to).transfer(_amount);
+        } else {
+            IERC20(_tokenAddr).transfer(_to, _amount);
+        }
     }
 
     function verifyMuonSig(
