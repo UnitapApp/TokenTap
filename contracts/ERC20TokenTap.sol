@@ -232,7 +232,7 @@ contract ERC20TokenTap is AccessControl {
     ) payable external {
         require(msg.sender == distributions[distributionId].provider, "Not permitted");
         require(maxNumClaims >= distributions[distributionId].maxNumClaims, "Invalid maxNumClaims");
-        require(endTime >= distributions[distributionId].endTime, "Invalid maxNumClaims");
+        require(endTime >= distributions[distributionId].endTime, "Invalid endTime");
 
         uint256 amount = (
             maxNumClaims - distributions[distributionId].maxNumClaims
