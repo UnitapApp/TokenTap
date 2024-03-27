@@ -172,7 +172,7 @@ describe("ERC20TokenTap", async () => {
         .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
           value: ethers.utils.parseEther("0"),
         })
-    ).to.be.revertedWith("Invalid token");
+    ).to.be.revertedWith("Invalid maxNumClaims");
   });
 
   it("should not be able to distribute usdc token with invalid date", async () => {
@@ -342,7 +342,7 @@ describe("ERC20TokenTap", async () => {
         .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
           value: ethers.utils.parseEther("0.02"),
         })
-    ).to.be.revertedWith("Invalid token");
+    ).to.be.revertedWith("Invalid maxNumClaims");
   });
 
   it("should not be able to distribute native token with invalid date", async () => {
@@ -509,5 +509,386 @@ describe("ERC20TokenTap", async () => {
     await expect(
       tokenTap.connect(user1).setMuonPublicKey(muonPublicKey)
     ).to.be.revertedWith(accessControlMessage);
+  });
+
+  it("Admin should be able to withdraw", async () => {
+    const now = await time.latest();
+    const token = ethers.constants.AddressZero;
+    const maxNumClaims = 5;
+    const claimAmount = ethers.utils.parseEther("1");
+    const startTime = now + 10;
+    const endTime = now + 20;
+
+    const tx = await tokenTap
+      .connect(user1)
+      .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+        value: ethers.utils.parseEther("5"),
+      });
+
+    const receipt = tx.wait();
+
+    expect(await ethers.provider.getBalance(tokenTap.address)).to.eq(
+      ethers.utils.parseEther("5")
+    );
+
+    const user2BalanceBefore = await ethers.provider.getBalance(user2.address);
+
+    await tokenTap
+      .connect(admin)
+      .adminWithdraw(ethers.utils.parseEther("2"), user2.address, token, {});
+
+    expect(await ethers.provider.getBalance(tokenTap.address)).to.eq(
+      ethers.utils.parseEther("3")
+    );
+
+    const user2BalanceAfter = await ethers.provider.getBalance(user2.address);
+
+    expect(user2BalanceAfter.sub(user2BalanceBefore)).to.eq(
+      ethers.utils.parseEther("2")
+    );
+  });
+
+  it("user (not admin) should not be able to withdraw", async () => {
+    const now = await time.latest();
+    const token = ethers.constants.AddressZero;
+    const maxNumClaims = 5;
+    const claimAmount = ethers.utils.parseEther("1");
+    const startTime = now + 10;
+    const endTime = now + 20;
+
+    const tx = await tokenTap
+      .connect(user1)
+      .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+        value: ethers.utils.parseEther("5"),
+      });
+
+    const receipt = tx.wait();
+
+    expect(await ethers.provider.getBalance(tokenTap.address)).to.eq(
+      ethers.utils.parseEther("5")
+    );
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .adminWithdraw(ethers.utils.parseEther("2"), user2.address, token, {})
+    ).to.be.revertedWith(
+      "AccessControl: account 0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc is missing role 0xa49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775"
+    );
+
+    expect(await ethers.provider.getBalance(tokenTap.address)).to.eq(
+      ethers.utils.parseEther("5")
+    );
+  });
+
+  it("admin should not be able to withdraw invalid amount", async () => {
+    const now = await time.latest();
+    const token = ethers.constants.AddressZero;
+    const maxNumClaims = 5;
+    const claimAmount = ethers.utils.parseEther("1");
+    const startTime = now + 10;
+    const endTime = now + 20;
+
+    const tx = await tokenTap
+      .connect(user1)
+      .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+        value: ethers.utils.parseEther("5"),
+      });
+
+    const receipt = tx.wait();
+
+    expect(await ethers.provider.getBalance(tokenTap.address)).to.eq(
+      ethers.utils.parseEther("5")
+    );
+
+    await expect(
+      tokenTap
+        .connect(admin)
+        .adminWithdraw(ethers.utils.parseEther("6"), user2.address, token, {})
+    ).to.be.rejected;
+
+    expect(await ethers.provider.getBalance(tokenTap.address)).to.eq(
+      ethers.utils.parseEther("5")
+    );
+  });
+
+  it("should be able to extend Distribution", async () => {
+    const now = await time.latest();
+    const token = ethers.constants.AddressZero;
+    const maxNumClaims = 5;
+    const claimAmount = ethers.utils.parseEther("1");
+    const startTime = now + 10;
+    const endTime = now + 20;
+
+    const tx = await tokenTap
+      .connect(user1)
+      .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+        value: ethers.utils.parseEther("5"),
+      });
+
+    const receipt = tx.wait();
+    let lastDistributionId = await tokenTap.lastDistributionId();
+    let distributions = await tokenTap.distributions(lastDistributionId);
+
+    await tokenTap
+      .connect(user1)
+      .extendDistribution(lastDistributionId, 7, endTime, {
+        value: ethers.utils.parseEther("2"),
+      });
+  });
+
+  it("should not be able to extend Distribution if is not provider", async () => {
+    const now = await time.latest();
+    const token = ethers.constants.AddressZero;
+    const maxNumClaims = 5;
+    const claimAmount = ethers.utils.parseEther("1");
+    const startTime = now + 10;
+    const endTime = now + 20;
+
+    const tx = await tokenTap
+      .connect(user1)
+      .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+        value: ethers.utils.parseEther("5"),
+      });
+
+    const receipt = tx.wait();
+    let lastDistributionId = await tokenTap.lastDistributionId();
+    let distributions = await tokenTap.distributions(lastDistributionId);
+
+    await expect(
+      tokenTap
+        .connect(admin)
+        .extendDistribution(lastDistributionId, 7, endTime, {
+          value: ethers.utils.parseEther("2"),
+        })
+    ).to.be.revertedWith("Not permitted");
+  });
+
+  it("should not be able to extend Distribution with invalid value", async () => {
+    const now = await time.latest();
+    const token = ethers.constants.AddressZero;
+    const maxNumClaims = 5;
+    const claimAmount = ethers.utils.parseEther("1");
+    const startTime = now + 10;
+    const endTime = now + 20;
+
+    const tx = await tokenTap
+      .connect(user1)
+      .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+        value: ethers.utils.parseEther("5"),
+      });
+
+    const receipt = tx.wait();
+    let lastDistributionId = await tokenTap.lastDistributionId();
+    let distributions = await tokenTap.distributions(lastDistributionId);
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .extendDistribution(lastDistributionId, 7, endTime, {
+          value: ethers.utils.parseEther("1"),
+        })
+    ).to.be.revertedWith("!msg.value");
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .extendDistribution(lastDistributionId, 7, endTime, {
+          value: ethers.utils.parseEther("0"),
+        })
+    ).to.be.revertedWith("!msg.value");
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .extendDistribution(lastDistributionId, 7, endTime, {
+          value: ethers.utils.parseEther("10"),
+        })
+    ).to.be.revertedWith("!msg.value");
+  });
+
+  it("should not be able to extend Distribution with invalid end time", async () => {
+    const now = await time.latest();
+    const token = ethers.constants.AddressZero;
+    const maxNumClaims = 5;
+    const claimAmount = ethers.utils.parseEther("1");
+    const startTime = now + 10;
+    const endTime = now + 20;
+
+    const tx = await tokenTap
+      .connect(user1)
+      .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+        value: ethers.utils.parseEther("5"),
+      });
+
+    const receipt = tx.wait();
+    let lastDistributionId = await tokenTap.lastDistributionId();
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .extendDistribution(lastDistributionId, 7, startTime, {
+          value: ethers.utils.parseEther("2"),
+        })
+    ).to.be.revertedWith("Invalid endTime");
+
+    await expect(
+      tokenTap.connect(user1).extendDistribution(lastDistributionId, 7, 0, {
+        value: ethers.utils.parseEther("2"),
+      })
+    ).to.be.revertedWith("Invalid endTime");
+  });
+
+  it("should be not able to extend Distribution invalid maxMumClaims", async () => {
+    const now = await time.latest();
+    const token = ethers.constants.AddressZero;
+    const maxNumClaims = 5;
+    const claimAmount = ethers.utils.parseEther("1");
+    const startTime = now + 10;
+    const endTime = now + 20;
+
+    const tx = await tokenTap
+      .connect(user1)
+      .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+        value: ethers.utils.parseEther("5"),
+      });
+
+    const receipt = tx.wait();
+    let lastDistributionId = await tokenTap.lastDistributionId();
+    let distributions = await tokenTap.distributions(lastDistributionId);
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .extendDistribution(lastDistributionId, 4, endTime, {
+          value: ethers.utils.parseEther("2"),
+        })
+    ).to.be.revertedWith("Invalid maxNumClaims");
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .extendDistribution(lastDistributionId, 0, endTime, {
+          value: ethers.utils.parseEther("0"),
+        })
+    ).to.be.revertedWith("Invalid maxNumClaims");
+  });
+
+  it("Admin should be able to withdraw usdc token", async () => {
+    await usdc.connect(user1).approve(tokenTap.address, ONE.mul(250));
+    const now = await time.latest();
+    const token = usdc.address;
+    const maxNumClaims = 5;
+    const claimAmount = ONE.mul(50);
+    const startTime = now + 10;
+    const endTime = now + 20;
+
+    const tx = await tokenTap
+      .connect(user1)
+      .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+        value: ethers.utils.parseEther("0"),
+      });
+
+    const receipt = tx.wait();
+
+    expect(await usdc.balanceOf(tokenTap.address)).to.eq(
+      claimAmount.mul(maxNumClaims)
+    );
+
+    expect(await ethers.provider.getBalance(tokenTap.address)).to.eq(
+      ethers.utils.parseEther("0")
+    );
+
+    const user2UsdcBalanceBefore = await usdc
+      .connect(user1)
+      .balanceOf(user2.address);
+
+    await tokenTap
+      .connect(admin)
+      .adminWithdraw(ethers.utils.parseEther("2"), user2.address, token, {});
+
+    expect(await usdc.balanceOf(tokenTap.address)).to.eq(
+      ethers.utils.parseEther("248")
+    );
+
+    const user2UsdcBalanceAfter = await usdc
+      .connect(user1)
+      .balanceOf(user2.address);
+
+    expect(
+      user2UsdcBalanceAfter
+        .sub(user2UsdcBalanceBefore)
+        .eq(ethers.utils.parseEther("2"))
+    );
+  });
+
+  it("user (not admin) should not be able to withdraw usdcToken", async () => {
+    await usdc.connect(user1).approve(tokenTap.address, ONE.mul(250));
+    const now = await time.latest();
+    const token = usdc.address;
+    const maxNumClaims = 5;
+    const claimAmount = ONE.mul(50);
+    const startTime = now + 10;
+    const endTime = now + 20;
+
+    const tx = await tokenTap
+      .connect(user1)
+      .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+        value: ethers.utils.parseEther("0"),
+      });
+
+    const receipt = tx.wait();
+
+    expect(await usdc.balanceOf(tokenTap.address)).to.eq(
+      claimAmount.mul(maxNumClaims)
+    );
+
+    await expect(
+      tokenTap
+        .connect(user1)
+        .adminWithdraw(ethers.utils.parseEther("2"), user2.address, token, {})
+    ).to.be.revertedWith(
+      "AccessControl: account 0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc is missing role 0xa49807205ce4d355092ef5a8a18f56e8913cf4a201fbe287825b095693c21775"
+    );
+
+    expect(await usdc.balanceOf(tokenTap.address)).to.eq(
+      claimAmount.mul(maxNumClaims)
+    );
+
+    expect(await ethers.provider.getBalance(tokenTap.address)).to.eq(
+      ethers.utils.parseEther("0")
+    );
+  });
+
+  it("admin should not be able to withdraw invalid amount usdcToken", async () => {
+    await usdc.connect(user1).approve(tokenTap.address, ONE.mul(450));
+    const now = await time.latest();
+    const token = usdc.address;
+    const maxNumClaims = 5;
+    const claimAmount = ONE.mul(50);
+    const startTime = now + 10;
+    const endTime = now + 20;
+
+    const tx = await tokenTap
+      .connect(user1)
+      .distributeToken(token, maxNumClaims, claimAmount, startTime, endTime, {
+        value: ethers.utils.parseEther("0"),
+      });
+
+    const receipt = tx.wait();
+
+    expect(await usdc.balanceOf(tokenTap.address)).to.eq(
+      claimAmount.mul(maxNumClaims)
+    );
+
+    await expect(
+      tokenTap
+        .connect(admin)
+        .adminWithdraw(ethers.utils.parseEther("260"), user2.address, token, {})
+    ).to.be.rejected;
+
+    expect(await usdc.balanceOf(tokenTap.address)).to.eq(
+      claimAmount.mul(maxNumClaims)
+    );
   });
 });
