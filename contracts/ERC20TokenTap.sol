@@ -177,7 +177,7 @@ contract ERC20TokenTap is AccessControl {
         emit TokensClaimed(distributions[distributionId].token, user, claimId);
     }
 
-    function withdrawReaminingTokens(address to, uint256 distributionId) external {
+    function withdrawRemainingTokens(address to, uint256 distributionId) external {
         require(msg.sender == distributions[distributionId].provider, "Not permitted");
         require(!distributions[distributionId].isRefunded, "Already refunded");
         require(block.timestamp > distributions[distributionId].endTime, "Distribution is still open");
@@ -233,6 +233,7 @@ contract ERC20TokenTap is AccessControl {
         require(msg.sender == distributions[distributionId].provider, "Not permitted");
         require(maxNumClaims >= distributions[distributionId].maxNumClaims, "Invalid maxNumClaims");
         require(endTime >= distributions[distributionId].endTime, "Invalid endTime");
+        require(!distributions[distributionId].isRefunded, "It's refunded");
 
         uint256 amount = (
             maxNumClaims - distributions[distributionId].maxNumClaims
