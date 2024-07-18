@@ -145,8 +145,10 @@ contract ERC20TokenTap is AccessControl {
         );
         require(
             block.timestamp > distributions[distributionId].startTime && 
-            block.timestamp <= distributions[distributionId].endTime
+            block.timestamp <= distributions[distributionId].endTime,
+            "Distribution is not open"
         );
+        require(!distributions[distributionId].isRefunded, "It's refunded");
 
         bytes32 hash = keccak256(
             abi.encodePacked(
