@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/access/AccessControl.sol";
-import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC20/IERC20Upgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/cryptography/ECDSAUpgradeable.sol";
 import "./IMuonClient.sol";
 
-contract ERC20TokenTap is AccessControl {
-    using SafeERC20 for IERC20;
-    using ECDSA for bytes32;
+contract ERC20TokenTap is AccessControlUpgradeable {
+    using SafeERC20Upgradeable for IERC20Upgradeable;
+    using ECDSAUpgradeable for bytes32;
 
     struct Distribution {
         address provider;
@@ -45,7 +46,7 @@ contract ERC20TokenTap is AccessControl {
         uint256 maxNumClaims,
         uint256 claimAmount
     );
-    
+
     event TokensClaimed(
         address indexed token,
         address indexed user,
@@ -64,21 +65,41 @@ contract ERC20TokenTap is AccessControl {
         uint256 endTime
     );
 
-    constructor(
-        address admin,
+    function initialize(
+        address _admin,
         uint256 _muonAppId,
         IMuonClient.PublicKey memory _muonPublicKey,
         address _muon,
         address _muonValidGateway
-    ) {
+    ) external initializer {
+        __ERC20TokenTap_init(
+            _admin,
+            _muonAppId,
+            _muonPublicKey,
+            _muon,
+            _muonValidGateway
+        );
+    }
+
+    function __ERC20TokenTap_init(
+        address _admin,
+        uint256 _muonAppId,
+        IMuonClient.PublicKey memory _muonPublicKey,
+        address _muon,
+        address _muonValidGateway
+    ) internal initializer {
+        __AccessControl_init();
+
         muonAppId = _muonAppId;
         muonPublicKey = _muonPublicKey;
         muon = IMuonClient(_muon);
         muonValidGateway = _muonValidGateway;
-        _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(DAO_ROLE, admin);
-        _grantRole(ADMIN_ROLE, admin);
+        _grantRole(DEFAULT_ADMIN_ROLE, _admin);
+        _grantRole(DAO_ROLE, _admin);
+        _grantRole(ADMIN_ROLE, _admin);
     }
+
+    function __ERC20TokenTap_init_unchained() internal initializer {}
 
     function distributeToken(
         address token,
@@ -89,7 +110,10 @@ contract ERC20TokenTap is AccessControl {
     ) external payable {
         require(maxNumClaims > 0, "Invalid maxNumClaims");
         require(claimAmount > 0, "Invalid claimAmount");
-        require(startTime > block.timestamp && endTime > startTime, "Invalid period");
+        require(
+            startTime > block.timestamp && endTime > startTime,
+            "Invalid period"
+        );
 
         ++lastDistributionId;
         Distribution storage distribution = distributions[lastDistributionId];
@@ -102,19 +126,20 @@ contract ERC20TokenTap is AccessControl {
 
         uint256 totalAmount = claimAmount * maxNumClaims;
 
-        if(token == address(0)) {
+        if (token == address(0)) {
             require(msg.value == totalAmount, "!msg.value");
         } else {
-            uint256 balance = IERC20(token).balanceOf(address(this));
+            uint256 balance = IERC20Upgradeable(token).balanceOf(address(this));
 
-            IERC20(token).safeTransferFrom(
+            IERC20Upgradeable(token).safeTransferFrom(
                 msg.sender,
                 address(this),
                 totalAmount
             );
 
-            uint256 receivedAmount = IERC20(token).balanceOf(address(this)) -
-            balance;
+            uint256 receivedAmount = IERC20Upgradeable(token).balanceOf(
+                address(this)
+            ) - balance;
 
             require(
                 totalAmount == receivedAmount,
@@ -122,7 +147,13 @@ contract ERC20TokenTap is AccessControl {
             );
         }
 
-        emit TokenDistributed(lastDistributionId, msg.sender, token, maxNumClaims, claimAmount);
+        emit TokenDistributed(
+            lastDistributionId,
+            msg.sender,
+            token,
+            maxNumClaims,
+            claimAmount
+        );
     }
 
     function claimToken(
@@ -140,12 +171,13 @@ contract ERC20TokenTap is AccessControl {
             "Invalid distributionId"
         );
         require(
-            distributions[distributionId].claimsCount < distributions[distributionId].maxNumClaims, 
+            distributions[distributionId].claimsCount <
+                distributions[distributionId].maxNumClaims,
             "Max num claims has been reached"
         );
         require(
-            block.timestamp > distributions[distributionId].startTime && 
-            block.timestamp <= distributions[distributionId].endTime,
+            block.timestamp > distributions[distributionId].startTime &&
+                block.timestamp <= distributions[distributionId].endTime,
             "Distribution is not open"
         );
         require(!distributions[distributionId].isRefunded, "It's refunded");
@@ -167,45 +199,51 @@ contract ERC20TokenTap is AccessControl {
         distributions[distributionId].claimsCount += 1;
         usedClaims[claimId] = true;
 
-        if(distributions[distributionId].token == address(0)) {
+        if (distributions[distributionId].token == address(0)) {
             payable(user).transfer(distributions[distributionId].claimAmount);
         } else {
-            IERC20(distributions[distributionId].token).safeTransfer(
-                user,
-                distributions[distributionId].claimAmount
-            );
+            IERC20Upgradeable(distributions[distributionId].token).safeTransfer(
+                    user,
+                    distributions[distributionId].claimAmount
+                );
         }
 
         emit TokensClaimed(distributions[distributionId].token, user, claimId);
     }
 
-    function withdrawRemainingTokens(address to, uint256 distributionId) external {
-        require(msg.sender == distributions[distributionId].provider, "Not permitted");
+    function withdrawRemainingTokens(
+        address to,
+        uint256 distributionId
+    ) external {
+        require(
+            msg.sender == distributions[distributionId].provider,
+            "Not permitted"
+        );
         require(!distributions[distributionId].isRefunded, "Already refunded");
-        require(block.timestamp > distributions[distributionId].endTime, "Distribution is still open");
+        require(
+            block.timestamp > distributions[distributionId].endTime,
+            "Distribution is still open"
+        );
 
         distributions[distributionId].isRefunded = true;
 
-        uint256 refundAmount = distributions[distributionId].claimAmount * (
-            distributions[distributionId].maxNumClaims - distributions[distributionId].claimsCount
-        );
+        uint256 refundAmount = distributions[distributionId].claimAmount *
+            (distributions[distributionId].maxNumClaims -
+                distributions[distributionId].claimsCount);
 
-        if(distributions[distributionId].token == address(0)) {
+        if (distributions[distributionId].token == address(0)) {
             payable(to).transfer(refundAmount);
         } else {
-            IERC20(distributions[distributionId].token).safeTransfer(
-                to,
-                refundAmount
-            );
+            IERC20Upgradeable(distributions[distributionId].token).safeTransfer(
+                    to,
+                    refundAmount
+                );
         }
 
         emit DistributionRefunded(to, distributionId, refundAmount);
-
     }
 
-    function setMuonAppId(
-        uint256 _muonAppId
-    ) external onlyRole(DAO_ROLE) {
+    function setMuonAppId(uint256 _muonAppId) external onlyRole(DAO_ROLE) {
         muonAppId = _muonAppId;
     }
 
@@ -215,9 +253,7 @@ contract ERC20TokenTap is AccessControl {
         muonPublicKey = _muonPublicKey;
     }
 
-    function setMuonAddress(
-        address _muonAddress
-    ) external onlyRole(DAO_ROLE) {
+    function setMuonAddress(address _muonAddress) external onlyRole(DAO_ROLE) {
         muon = IMuonClient(_muonAddress);
     }
 
@@ -228,40 +264,49 @@ contract ERC20TokenTap is AccessControl {
     }
 
     function extendDistribution(
-        uint256 distributionId, 
-        uint256 maxNumClaims, 
+        uint256 distributionId,
+        uint256 maxNumClaims,
         uint256 endTime
-    ) payable external {
-        require(msg.sender == distributions[distributionId].provider, "Not permitted");
-        require(maxNumClaims >= distributions[distributionId].maxNumClaims, "Invalid maxNumClaims");
-        require(endTime >= distributions[distributionId].endTime, "Invalid endTime");
+    ) external payable {
+        require(
+            msg.sender == distributions[distributionId].provider,
+            "Not permitted"
+        );
+        require(
+            maxNumClaims >= distributions[distributionId].maxNumClaims,
+            "Invalid maxNumClaims"
+        );
+        require(
+            endTime >= distributions[distributionId].endTime,
+            "Invalid endTime"
+        );
         require(!distributions[distributionId].isRefunded, "It's refunded");
 
-        uint256 amount = (
-            maxNumClaims - distributions[distributionId].maxNumClaims
-        ) * distributions[distributionId].claimAmount;
+        uint256 amount = (maxNumClaims -
+            distributions[distributionId].maxNumClaims) *
+            distributions[distributionId].claimAmount;
 
         if (amount > 0) {
             address token = distributions[distributionId].token;
-            
-            if(token == address(0)) {
+
+            if (token == address(0)) {
                 require(msg.value == amount, "!msg.value");
             } else {
-                uint256 balance = IERC20(token).balanceOf(address(this));
+                uint256 balance = IERC20Upgradeable(token).balanceOf(
+                    address(this)
+                );
 
-                IERC20(token).safeTransferFrom(
+                IERC20Upgradeable(token).safeTransferFrom(
                     msg.sender,
                     address(this),
                     amount
                 );
 
-                uint256 receivedAmount = IERC20(token).balanceOf(address(this)) -
-                balance;
+                uint256 receivedAmount = IERC20Upgradeable(token).balanceOf(
+                    address(this)
+                ) - balance;
 
-                require(
-                    amount == receivedAmount,
-                    "receivedAmount != amount"
-                );
+                require(amount == receivedAmount, "receivedAmount != amount");
             }
         }
 
@@ -280,7 +325,7 @@ contract ERC20TokenTap is AccessControl {
         if (_tokenAddr == address(0)) {
             payable(_to).transfer(_amount);
         } else {
-            IERC20(_tokenAddr).transfer(_to, _amount);
+            IERC20Upgradeable(_tokenAddr).transfer(_to, _amount);
         }
     }
 
